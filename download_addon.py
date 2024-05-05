@@ -4,10 +4,9 @@ import zipfile
 import os
 import sys
 import shutil
-from pathlib import Path
 import re
 
-ADDON_PATH = "."
+ADDON_PATH = "/run/media/gianluca/7954e2ae-6c95-457b-9f0a-5f9e03a996a4/steam/steamapps/compatdata/306130/pfx/drive_c/users/steamuser/Documents/Elder Scrolls Online/live/AddOns/"
 FILELIST_PATH = os.path.join(ADDON_PATH, "filelist.json")
 INSTALLED_ADDONS_PATH = os.path.join(ADDON_PATH, "installed_addons.json")
 CONFIG_INSTALL_DEPS = True
@@ -25,6 +24,8 @@ def download_filelist():
 def search_json_file(searchtext):
     with open(FILELIST_PATH, 'r') as file:
         data = json.load(file)
+
+    # TODO: ignore spaces, ignore "'". Example "Elm's Markers" shall be found by "elmsmarkers" or "ExecuteNow" by "execute now"
 
     searchtext_lower = searchtext.lower()
     matches = []
@@ -127,7 +128,7 @@ def search_and_choose(search_text):
     found_addons_indices = search_json_file(search_text)
 
     if not found_addons_indices:
-        print("No AddOns found for the given search text.")
+        print("ERROR! No AddOns found for " + search_text)
         return
 
     for num, i in enumerate(found_addons_indices[:5], start=1):
@@ -156,10 +157,7 @@ def search_and_choose(search_text):
     return file_info
 
 def extract_dependencies(directory):
-    file_path = Path(directory) / (Path(directory).name + ".txt")
-    
-    if not file_path.exists():
-        return []
+    file_path = os.path.join(ADDON_PATH, directory, directory + ".txt")
     
     dependencies = []
     
@@ -188,7 +186,12 @@ def install(file_info):
             print("Checking dependencies, found: ")
             print(deps)
             for dep in deps:
+                # TODO:
+                # 1. check if "dep" is a directory under "dir", if yes, continue -- some libs are only delivered with the respective addon
+                # 2. check if "dep" is a directory under ADDON_PATH, if yes, continue
                 file_info = search_and_choose(dep)
+                if file_info == None:
+                    continue
                 dir = download_and_extract_zip(file_info["UID"])
                 file_info["Directory"] = dir
                 store_installed_addon(file_info)
@@ -205,10 +208,13 @@ def remove(file_info):
 
     for existing_addon in existing_addons:
         if file_info["UID"] == existing_addon["UID"]:
-            dir = existing_addon["Directory"]
-            shutil.rmtree(dir)
+            try:
+                dir = os.path.join(ADDON_PATH, str(existing_addon["Directory"]))
+                shutil.rmtree(dir)
+            except FileNotFoundError:
+                print("Addon Path not found. Deleting entry in Database.")
 
-            existing_addons.remove(os.path.join(ADDON_PATH, existing_addon))
+            existing_addons.remove(existing_addon)
             with open(INSTALLED_ADDONS_PATH, 'w') as file:
                 json.dump(existing_addons, file, indent=4)
             
