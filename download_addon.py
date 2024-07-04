@@ -37,7 +37,7 @@ def search_json_file(searchtext):
     return matches
 
 def get_file_info(index):
-    with open("filelist.json", 'r') as file:
+    with open(FILELIST_PATH, 'r') as file:
         data = json.load(file)
 
     if index < 0 or index >= len(data):
