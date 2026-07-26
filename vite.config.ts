@@ -57,7 +57,11 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: './dist',
+    // Vite must build into `resources/` (== cli.resourcesPath) so `neu build`
+    // packages the frontend into resources.neu. documentRoot in
+    // neutralino.config.json is set to match ("/resources/"). `dist/` is
+    // reserved for neu's packaged output (dist/wolfs-addon-manager/).
+    outDir: './resources',
     // Neutralino uses the OS webview (WebKitGTK on Linux, WebView2 on Windows,
     // WebKit on macOS). A modern baseline target works across all of them.
     target: 'es2020',

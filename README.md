@@ -149,14 +149,16 @@ to exactly the methods the app uses: `app.exit`, `os.getPath`, `os.execCommand`,
 
 ## Project structure and usage
 
-Frontend code lives in `src/`; the Neutralino config at the project root; the Vite
-build output in `dist/`. See `package.json` for all scripts.
+Frontend code lives in `src/`; the Neutralino config at the project root; Vite builds
+the frontend into `resources/` (so `neu build` can package it — see the build gotcha
+below); `neu build` writes the packaged distribution to `dist/wolfs-addon-manager/`.
+See `package.json` for all scripts.
 
 ### Common commands
 
 ```sh
 pnpm dev          # run the app (Vite dev server + Neutralino window, with HMR)
-pnpm build:fe     # type-check (vue-tsc) + build the frontend (vite) into dist/
+pnpm build:fe     # type-check (vue-tsc) + build the frontend (vite) into resources/
 pnpm build        # build:fe + package the Neutralino distribution (neu build)
 pnpm type-check   # vue-tsc type-check only
 pnpm neu:update   # (re)fetch the Neutralino host binaries into bin/
@@ -233,6 +235,19 @@ These are worth knowing before changing the plumbing:
 - **`neu build` needs `cli.resourcesPath`/`extensionsPath`** set in
   `neutralino.config.json`, even with the Vite `frontendLibrary` integration; without
   them the build fails with `ENOENT: no such file or directory, stat './undefined'`.
+
+### Build (`neu build`) gotchas
+
+- **Vite's `outDir`, `cli.resourcesPath`, and `documentRoot` must all agree.** `neu
+  build` packages **only** the `cli.resourcesPath` folder (`resources/`) into
+  `resources.neu` — it does *not* read `documentRoot` for packaging, and the
+  `frontendLibrary.buildCommand` output is *not* copied there for you. So if Vite
+  builds anywhere other than `resources/`, the package ends up containing only the
+  config + icon and the binary opens to a blank white window, with the log showing
+  `NE_RS_UNBLDRE: Unable to load application resource file /<root>/index.html`. The
+  invariant here is: Vite `build.outDir: './resources'` == `cli.resourcesPath:
+  '/resources/'` == `documentRoot: '/resources/'`. `dist/` is reserved for neu's own
+  packaged output (`dist/wolfs-addon-manager/`), so don't point Vite at it.
 
 ### Dev mode (`neu run`) gotchas
 
