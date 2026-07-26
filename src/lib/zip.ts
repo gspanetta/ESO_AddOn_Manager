@@ -1,7 +1,7 @@
 import { unzipSync } from 'fflate'
-import { exists, mkdir, readTextFile, writeFile, remove } from '@tauri-apps/plugin-fs'
+import { filesystem } from '@neutralinojs/lib'
 import { fetchZip } from './http'
-import { dirname, joinSync, safeRelative } from './paths'
+import { dirname, joinSync, pathExists, safeRelative } from './paths'
 
 /**
  * Download and extract an addon zip into the target addon directory.
@@ -48,17 +48,19 @@ export async function downloadAndExtractZip(id: number, addonPath: string): Prom
   // If the addon folder already exists (re-install / upgrade), remove it first
   // so stale files from a previous version don't linger.
   const addonDir = joinSync(addonPath, topLevelDir)
-  if (await exists(addonDir)) {
-    await remove(addonDir, { recursive: true })
+  if (await pathExists(addonDir)) {
+    await filesystem.remove(addonDir)
   }
 
   for (const dir of dirsToCreate) {
     if (dir && dir !== addonPath) {
-      await mkdir(dir, { recursive: true })
+      await filesystem.createDirectory(dir)
     }
   }
   for (const { target, data } of files) {
-    await writeFile(target, data)
+    // writeBinaryFile expects an ArrayBuffer; copy the Uint8Array's bytes into a
+    // clean ArrayBuffer to avoid offset/length issues with shared buffers.
+    await filesystem.writeBinaryFile(target, data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength))
   }
 
   return topLevelDir
@@ -76,10 +78,10 @@ export async function extractDependencies(addonPath: string, directory: string):
   const basePath = joinSync(addonPath, directory, directory)
   let text: string | null = null
   try {
-    text = await readTextFile(`${basePath}.addon`)
+    text = await filesystem.readFile(`${basePath}.addon`)
   } catch {
     try {
-      text = await readTextFile(`${basePath}.txt`)
+      text = await filesystem.readFile(`${basePath}.txt`)
     } catch {
       // No metadata file found; nothing to depend on.
       return []

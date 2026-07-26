@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { open } from '@tauri-apps/plugin-dialog'
+import { os } from '@neutralinojs/lib'
 
 const store = useAddonsStore()
 
@@ -23,7 +23,7 @@ function closeFolderDialog() {
 }
 
 async function browse() {
-  const selected = await open({ directory: true, multiple: false })
+  const selected = await os.showFolderDialog('Select your ESO AddOns folder')
   if (typeof selected === 'string' && selected) {
     pathInput.value = selected
   }

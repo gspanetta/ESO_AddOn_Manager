@@ -1,8 +1,7 @@
-import { load, type Store } from '@tauri-apps/plugin-store'
+import { filesystem } from '@neutralinojs/lib'
+import { appDataDirPath, joinPath } from './paths'
 
-const STORE_FILE = 'config.json'
-const KEY_ADDON_PATH = 'addonPath'
-const KEY_INSTALL_DEPS = 'installDeps'
+const CONFIG_FILE = 'config.json'
 
 export interface AppConfig {
   /** User-chosen addon target directory, or null until configured. */
@@ -16,37 +15,49 @@ const DEFAULT_CONFIG: AppConfig = {
   installDeps: true,
 }
 
-let storePromise: Promise<Store> | null = null
+let cachedConfigPath: string | null = null
 
-/** Lazily create and load the persistent config store. */
-async function getStore(): Promise<Store> {
-  if (!storePromise) {
-    storePromise = load(STORE_FILE, { autoSave: true })
+/** Absolute path to the config file inside the app data dir (cached). */
+async function configPath(): Promise<string> {
+  if (!cachedConfigPath) {
+    cachedConfigPath = await joinPath(await appDataDirPath(), CONFIG_FILE)
   }
-  return storePromise
+  return cachedConfigPath
 }
 
-/** Load the full config, falling back to defaults for missing keys. */
+/**
+ * Load the full config, falling back to defaults for missing keys.
+ * Stored as a plain JSON file (replaces the old `tauri-plugin-store`).
+ */
 export async function loadConfig(): Promise<AppConfig> {
-  const store = await getStore()
-  const addonPath = await store.get<string | null>(KEY_ADDON_PATH)
-  const installDeps = await store.get<boolean>(KEY_INSTALL_DEPS)
-  return {
-    addonPath: addonPath ?? DEFAULT_CONFIG.addonPath,
-    installDeps: installDeps ?? DEFAULT_CONFIG.installDeps,
+  try {
+    const text = await filesystem.readFile(await configPath())
+    const parsed = JSON.parse(text) as Partial<AppConfig>
+    return {
+      addonPath: parsed.addonPath ?? DEFAULT_CONFIG.addonPath,
+      installDeps: parsed.installDeps ?? DEFAULT_CONFIG.installDeps,
+    }
+  } catch {
+    return { ...DEFAULT_CONFIG }
   }
+}
+
+/** Persist the whole config object. */
+async function saveConfig(config: AppConfig): Promise<void> {
+  await filesystem.createDirectory(await appDataDirPath())
+  await filesystem.writeFile(await configPath(), JSON.stringify(config, null, 2))
 }
 
 /** Persist the addon target directory. */
 export async function saveAddonPath(path: string | null): Promise<void> {
-  const store = await getStore()
-  await store.set(KEY_ADDON_PATH, path)
-  await store.save()
+  const config = await loadConfig()
+  config.addonPath = path
+  await saveConfig(config)
 }
 
 /** Persist the auto-install-dependencies toggle. */
 export async function saveInstallDeps(value: boolean): Promise<void> {
-  const store = await getStore()
-  await store.set(KEY_INSTALL_DEPS, value)
-  await store.save()
+  const config = await loadConfig()
+  config.installDeps = value
+  await saveConfig(config)
 }

@@ -1,21 +1,21 @@
 {
-  // Use IntelliSense to learn about possible attributes.
-  // Hover to view descriptions of existing attributes.
+  // Use IntelliSense to learn more about possible attributes.
   // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
   "version": "0.2.0",
   "configurations": [
     {
-      "type": "lldb",
+      "name": "Run Neutralino (dev)",
+      "type": "node-terminal",
       "request": "launch",
-      "name": "Debug Tauri",
-      "program": "cargo",
-      "args": [
-        "run",
-        "--manifest-path=./src-tauri/Cargo.toml",
-        "--no-default-features"
-      ],
-      "cwd": "${workspaceFolder}",
-      "preLaunchTask": "ui:dev"
+      "command": "pnpm dev",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Vite dev server only",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "pnpm vite:dev",
+      "cwd": "${workspaceFolder}"
     }
   ]
 }

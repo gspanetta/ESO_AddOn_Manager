@@ -1,4 +1,4 @@
-import { readDir } from '@tauri-apps/plugin-fs'
+import { filesystem } from '@neutralinojs/lib'
 import { toInstalledAddon, type FileListEntry, type InstalledAddon } from './types'
 import { loadInstalled, saveInstalled } from './installed'
 
@@ -46,8 +46,8 @@ export async function reconcileInstalledWithFolder(
 ): Promise<ReconcileResult> {
   const index = filelist ? buildDirIndex(filelist) : new Map<string, FileListEntry>()
 
-  const entries = await readDir(addonPath)
-  const dirNames = entries.filter((e) => e.isDirectory).map((e) => e.name)
+  const entries = await filesystem.readDirectory(addonPath, { recursive: false })
+  const dirNames = entries.filter((e) => e.type === 'DIRECTORY').map((e) => e.entry)
   const presentDirs = new Set(dirNames)
 
   const existing = await loadInstalled()

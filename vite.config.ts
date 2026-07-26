@@ -4,13 +4,9 @@ import { fileURLToPath, URL } from 'node:url'
 import AutoImport from 'unplugin-auto-import/vite'
 import Components from 'unplugin-vue-components/vite'
 import { defineConfig } from 'vite'
-import { nodePolyfills } from 'vite-plugin-node-polyfills'
-import topLevelAwait from 'vite-plugin-top-level-await'
 import vueDevTools from 'vite-plugin-vue-devtools'
 import { version as pkgVersion } from './package.json'
 
-const HOST = process.env.TAURI_DEV_HOST
-const PLATFORM = process.env.TAURI_ENV_PLATFORM
 process.env.VITE_APP_VERSION = pkgVersion
 if (process.env.NODE_ENV === 'production') {
   process.env.VITE_APP_BUILD_EPOCH = new Date().getTime().toString()
@@ -20,8 +16,6 @@ if (process.env.NODE_ENV === 'production') {
 export default defineConfig({
   plugins: [
     tailwind(),
-    topLevelAwait(),
-    nodePolyfills(),
     vue(),
     vueDevTools(),
     AutoImport({
@@ -30,7 +24,6 @@ export default defineConfig({
         'vue-router',
         'pinia',
         {
-          '@/store': ['useStore'],
           '@/stores/addons': ['useAddonsStore'],
         },
       ],
@@ -51,30 +44,25 @@ export default defineConfig({
   },
 
   clearScreen: false,
-  envPrefix: ['VITE_', 'TAURI_'],
+  envPrefix: ['VITE_'],
   server: {
     port: 1420,
     strictPort: true,
-    host: HOST || false,
-    hmr: HOST
-      ? {
-          protocol: 'ws',
-          host: HOST,
-          port: 1421,
-        }
-      : undefined,
+    // Bind IPv4 explicitly. neu's port-wait probe (and the Neutralino webview)
+    // resolve `localhost` to 127.0.0.1, but Vite v8 defaults to binding IPv6
+    // [::1] only — that mismatch makes `neu run` time out waiting for the port.
+    host: '127.0.0.1',
     watch: {
-      ignored: ['**/src-tauri/**'],
+      ignored: ['**/bin/**', '**/.tmp/**'],
     },
   },
   build: {
     outDir: './dist',
-    // See https://web-platform-dx.github.io/web-features/ for Vite 8 default targets (baseline-widely-available)
-    // See https://v2.tauri.app/reference/webview-versions/ for Tauri details
-    target: PLATFORM == 'windows' ? 'chrome111' : 'safari16.4',
-    minify: !process.env.TAURI_DEBUG ? 'esbuild' : false,
+    // Neutralino uses the OS webview (WebKitGTK on Linux, WebView2 on Windows,
+    // WebKit on macOS). A modern baseline target works across all of them.
+    target: 'es2020',
+    minify: 'esbuild',
     emptyOutDir: true,
     chunkSizeWarningLimit: 1024,
-    sourcemap: !!process.env.TAURI_ENV_DEBUG,
   },
 })

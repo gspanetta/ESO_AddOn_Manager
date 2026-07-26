@@ -11,24 +11,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  publish-tauri:
+  publish:
     permissions:
       contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: "macos-latest"
-            args: "--target aarch64-apple-darwin"
-          # Uncomment for Intel builds
-          #   - platform: 'macos-latest' # for Intel based macs.
-          #     args: '--target x86_64-apple-darwin'
-          - platform: "ubuntu-24.04"
-            args: ""
-          - platform: "windows-latest"
-            args: ""
-
-    runs-on: ${{ matrix.platform }}
+    runs-on: "ubuntu-24.04"
     steps:
       - uses: actions/checkout@v6.1.0
 
@@ -44,25 +30,21 @@ jobs:
           node-version: 24
           cache: "pnpm"
 
-      - name: install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          # Those targets are only used on macos runners so it's in an `if` to slightly speed up windows and linux builds.
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      # One runner builds every platform: `neu update` downloads the prebuilt
+      # Neutralino binaries (win/mac/linux) and `neu build` packages them all
+      # (it even patches the Windows exe metadata on Linux). No Rust, no matrix.
+      - name: Fetch Neutralino binaries
+        run: pnpm neu:update
 
-      - name: install dependencies (ubuntu only)
-        if: matrix.platform == 'ubuntu-24.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - name: Build
+        run: pnpm build
 
-      - uses: tauri-apps/tauri-action@action-v0.5.20
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
         with:
-          tagName: v__VERSION__ # the action automatically replaces \_\_VERSION\_\_ with the app version.
-          releaseName: "v__VERSION__"
-          releaseBody: "Note: macOS builds are not signed so in order to run the app, after moving the app to Applications folder you need to run xattr -c /Applications/tauri-app.app in the terminal. (See tauri-apps/tauri-action#919) See [CHANGES.md](https://github.com/Uninen/tauri-vue-template/blob/main/CHANGES.md) for a complete list of changes."
-          releaseDraft: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+          draft: true
           prerelease: false
-          args: ${{ matrix.args }}
+          generate_release_notes: true
+          files: |
+            dist/wolfs-addon-manager/*

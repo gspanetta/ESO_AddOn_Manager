@@ -2,7 +2,7 @@
   "extends": "@vue/tsconfig/tsconfig.dom.json",
   "include": [
     "env.d.ts",
-    "interface-extensions.d.ts",
+    "src/neutralino-env.d.ts",
     "components.d.ts",
     "auto-imports.d.ts",
     "src/**/*",

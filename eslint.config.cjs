@@ -1,4 +1,3 @@
-const pluginVitest = require('@vitest/eslint-plugin')
 const skipFormatting = require('@vue/eslint-config-prettier/skip-formatting')
 const vueTsEslintConfig = require('@vue/eslint-config-typescript')
 const security = require('eslint-plugin-security')
@@ -41,11 +40,6 @@ module.exports = [
 
   ...pluginVue.configs['flat/recommended'],
   ...vueTsEslintConfig(),
-
-  {
-    ...pluginVitest.configs.recommended,
-    files: ['tests/unit/**/*'],
-  },
 
   skipFormatting,
 

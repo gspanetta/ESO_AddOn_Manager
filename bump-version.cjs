@@ -42,15 +42,9 @@ async function updateVersion() {
   )
 
   await updateFile(
-    'src-tauri/tauri.conf.json',
+    'neutralino.config.json',
     oldVer => `"version": "${oldVer}"`,
     newVer => `"version": "${newVer}"`
-  )
-
-  await updateFile(
-    'src-tauri/Cargo.toml',
-    oldVer => `version = "${oldVer}"`,
-    newVer => `version = "${newVer}"`
   )
 }
 

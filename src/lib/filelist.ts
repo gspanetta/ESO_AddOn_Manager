@@ -1,11 +1,11 @@
-import { readTextFile } from '@tauri-apps/plugin-fs'
+import { filesystem } from '@neutralinojs/lib'
 import { filelistCachePath } from './paths'
 import type { FileListEntry } from './types'
 
 /** Load the cached filelist from the app data dir, or null if not cached. */
 export async function loadFilelist(): Promise<FileListEntry[] | null> {
   try {
-    const text = await readTextFile(await filelistCachePath())
+    const text = await filesystem.readFile(await filelistCachePath())
     return JSON.parse(text) as FileListEntry[]
   } catch {
     return null

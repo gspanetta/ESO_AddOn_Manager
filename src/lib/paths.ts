@@ -1,4 +1,10 @@
-import { appDataDir, join, sep } from '@tauri-apps/api/path'
+import { filesystem, os } from '@neutralinojs/lib'
+
+/**
+ * Subfolder of the platform data directory where the app keeps its data.
+ * Matches the old Tauri identifier so existing users keep their config/DB/cache.
+ */
+const APP_SUBDIR = 'com.eso.addonmanager'
 
 /** Names of the app-managed data files (stored in the app data directory). */
 const FILELIST_CACHE = 'filelist.json'
@@ -9,37 +15,46 @@ let cachedAppDataDir: string | null = null
 /** Absolute path to the app data directory (cached after first call). */
 export async function appDataDirPath(): Promise<string> {
   if (!cachedAppDataDir) {
-    cachedAppDataDir = await appDataDir()
+    const base = await os.getPath('data')
+    cachedAppDataDir = await filesystem.getJoinedPath(base, APP_SUBDIR)
   }
   return cachedAppDataDir
 }
 
 /** Absolute path to the cached filelist inside the app data dir. */
 export async function filelistCachePath(): Promise<string> {
-  return join(await appDataDirPath(), FILELIST_CACHE)
+  return filesystem.getJoinedPath(await appDataDirPath(), FILELIST_CACHE)
 }
 
 /** Absolute path to the installed-addon database inside the app data dir. */
 export async function installedDbPath(): Promise<string> {
-  return join(await appDataDirPath(), INSTALLED_DB)
+  return filesystem.getJoinedPath(await appDataDirPath(), INSTALLED_DB)
 }
 
 /**
  * Join an arbitrary number of path segments using the platform separator.
- * A thin async wrapper around Tauri's `join` for consistency; for the
- * performance-sensitive zip extraction loop we use `joinSync` instead.
+ * Async wrapper around Neutralino's `filesystem.getJoinedPath`.
  */
 export async function joinPath(...segments: string[]): Promise<string> {
-  return join(...segments)
+  return filesystem.getJoinedPath(...segments)
+}
+
+/**
+ * The OS path separator, resolved once from the runtime `NL_OS` global that
+ * Neutralino injects before app code runs. Used by the synchronous path helpers.
+ */
+function getSep(): string {
+  const osName = typeof window !== 'undefined' && window.NL_OS ? String(window.NL_OS) : ''
+  return osName.toLowerCase().includes('win') ? '\\' : '/'
 }
 
 /**
  * Synchronous path join using the platform separator. Used in hot loops
- * (e.g. zip extraction) where awaiting Tauri's `join` per entry is wasteful.
+ * (e.g. zip extraction) where awaiting an async join per entry is wasteful.
  * Leading separators are stripped from all but the first segment.
  */
 export function joinSync(...segments: string[]): string {
-  const sepStr = sep()
+  const sepStr = getSep()
   const parts: string[] = []
   for (let i = 0; i < segments.length; i++) {
     let s = segments[i]
@@ -59,7 +74,7 @@ export function joinSync(...segments: string[]): string {
 
 /** Return the parent directory of a path (synchronous, platform-aware). */
 export function dirname(p: string): string {
-  const sepStr = sep()
+  const sepStr = getSep()
   const idx = p.lastIndexOf(sepStr)
   if (idx <= 0) return p.startsWith(sepStr) ? sepStr : '.'
   return p.slice(0, idx)
@@ -67,7 +82,7 @@ export function dirname(p: string): string {
 
 /** Return the final segment of a path. */
 export function basename(p: string): string {
-  const sepStr = sep()
+  const sepStr = getSep()
   const idx = p.lastIndexOf(sepStr)
   return idx === -1 ? p : p.slice(idx + sepStr.length)
 }
@@ -86,5 +101,18 @@ export function safeRelative(entryPath: string): string | null {
     if (seg === '..') return null
   }
   // convert to platform separators
-  return segments.join(sep())
+  return segments.join(getSep())
+}
+
+/**
+ * Check whether a path exists (file or directory).
+ * Neutralino has no `exists`; this wraps `getStats` in a try/catch.
+ */
+export async function pathExists(p: string): Promise<boolean> {
+  try {
+    await filesystem.getStats(p)
+    return true
+  } catch {
+    return false
+  }
 }

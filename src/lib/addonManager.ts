@@ -1,8 +1,8 @@
-import { exists, remove } from '@tauri-apps/plugin-fs'
+import { filesystem } from '@neutralinojs/lib'
 import { downloadAndExtractZip, extractDependencies } from './zip'
 import { upsertInstalled, removeInstalledRecord } from './installed'
 import { getEntryByUid } from './filelist'
-import { joinSync } from './paths'
+import { joinSync, pathExists } from './paths'
 import { toInstalledAddon, type FileListEntry, type InstalledAddon } from './types'
 
 export interface InstallContext {
@@ -42,9 +42,9 @@ export async function installAddon(
     const deps = await extractDependencies(ctx.addonPath, directory)
     for (const dep of deps) {
       // 1. bundled inside the addon folder?
-      if (await exists(joinSync(ctx.addonPath, directory, dep))) continue
+      if (await pathExists(joinSync(ctx.addonPath, directory, dep))) continue
       // 2. already installed directly under the addon path?
-      if (await exists(joinSync(ctx.addonPath, dep))) continue
+      if (await pathExists(joinSync(ctx.addonPath, dep))) continue
 
       const chosen = await ctx.resolveDependency(dep)
       if (!chosen) continue
@@ -65,8 +65,8 @@ export async function installAddon(
  */
 export async function removeAddon(addon: InstalledAddon, addonPath: string): Promise<void> {
   const dir = joinSync(addonPath, addon.directory)
-  if (await exists(dir)) {
-    await remove(dir, { recursive: true })
+  if (await pathExists(dir)) {
+    await filesystem.remove(dir)
   }
   await removeInstalledRecord(addon.uid)
 }

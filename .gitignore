@@ -13,10 +13,10 @@ dist
 dist-ssr
 *.local
 
-# Tauri / Rust
-target/
-src-tauri/target/
-src-tauri/gen/schemas/
+# Neutralino
+bin/
+.tmp/
+resources.neu
 
 # Environment & secrets
 .env
@@ -37,7 +37,6 @@ LOCAL_NOTES.md
 .vscode/*
 !.vscode/extensions.json
 !.vscode/launch.json
-!.vscode/tasks.json
 
 # OS / runtime cruft
 Thumbs.db

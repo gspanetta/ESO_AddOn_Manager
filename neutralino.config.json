@@ -1,0 +1,75 @@
+{
+  "$schema": "https://raw.githubusercontent.com/neutralinojs/neutralinojs/main/schemas/neutralino.config.schema.json",
+  "applicationId": "com.eso.addonmanager",
+  "version": "1.0.0",
+  "defaultMode": "window",
+  "port": 0,
+  "documentRoot": "/dist/",
+  "url": "/",
+  "enableServer": true,
+  "enableNativeAPI": true,
+  "tokenSecurity": "one-time",
+  "logging": {
+    "enabled": true,
+    "writeToLogFile": true
+  },
+  "nativeAllowList": [
+    "app.exit",
+    "os.getPath",
+    "os.execCommand",
+    "os.showFolderDialog",
+    "filesystem.readFile",
+    "filesystem.writeFile",
+    "filesystem.readBinaryFile",
+    "filesystem.writeBinaryFile",
+    "filesystem.createDirectory",
+    "filesystem.readDirectory",
+    "filesystem.remove",
+    "filesystem.getStats",
+    "filesystem.getJoinedPath",
+    "net.request"
+  ],
+  "modes": {
+    "window": {
+      "title": "Wolf's AddOn Manager",
+      "width": 1100,
+      "height": 750,
+      "minWidth": 800,
+      "minHeight": 500,
+      "center": true,
+      "fullScreen": false,
+      "alwaysOnTop": false,
+      "icon": "/icon.png",
+      "enableInspector": true,
+      "borderless": false,
+      "maximize": false,
+      "hidden": false,
+      "resizable": true,
+      "exitProcessOnClose": true
+    },
+    "browser": {
+      "nativeBlockList": ["filesystem.*"]
+    },
+    "cloud": {
+      "nativeAllowList": ["app.*"]
+    },
+    "chrome": {
+      "width": 1100,
+      "height": 750,
+      "nativeBlockList": ["filesystem.*", "os.*"]
+    }
+  },
+  "cli": {
+    "binaryName": "wolfs-addon-manager",
+    "binaryVersion": "6.9.0",
+    "resourcesPath": "/resources/",
+    "extensionsPath": "/extensions/",
+    "frontendLibrary": {
+      "projectPath": ".",
+      "patchFile": "/index.html",
+      "devUrl": "http://127.0.0.1:1420",
+      "devCommand": "pnpm vite:dev",
+      "buildCommand": "pnpm build:fe"
+    }
+  }
+}

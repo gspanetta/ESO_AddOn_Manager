@@ -1,11 +1,11 @@
-import { mkdir, readTextFile, writeTextFile } from '@tauri-apps/plugin-fs'
+import { filesystem } from '@neutralinojs/lib'
 import { dirname, installedDbPath } from './paths'
 import type { InstalledAddon } from './types'
 
 /** Load the installed-addon database, or an empty list if missing/corrupt. */
 export async function loadInstalled(): Promise<InstalledAddon[]> {
   try {
-    const text = await readTextFile(await installedDbPath())
+    const text = await filesystem.readFile(await installedDbPath())
     const parsed = JSON.parse(text)
     return Array.isArray(parsed) ? (parsed as InstalledAddon[]) : []
   } catch {
@@ -16,8 +16,8 @@ export async function loadInstalled(): Promise<InstalledAddon[]> {
 /** Persist the full installed-addon database. */
 export async function saveInstalled(list: InstalledAddon[]): Promise<void> {
   const dbPath = await installedDbPath()
-  await mkdir(dirname(dbPath), { recursive: true })
-  await writeTextFile(dbPath, JSON.stringify(list, null, 2))
+  await filesystem.createDirectory(dirname(dbPath))
+  await filesystem.writeFile(dbPath, JSON.stringify(list, null, 2))
 }
 
 /**
