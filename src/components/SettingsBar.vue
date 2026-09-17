@@ -40,8 +40,7 @@ async function savePath() {
 }
 
 // --- Settings backup (export / import) ---
-const showImportConfirm = ref(false)
-const importSummary = ref<BackupImportResult | null>(null)
+const importSummary = ref<(BackupImportResult & { installFailures: { name: string; error: string }[] }) | null>(null)
 const exportSummary = ref<BackupExportResult | null>(null)
 
 async function onExport() {
@@ -50,14 +49,15 @@ async function onExport() {
   if (result) exportSummary.value = result
 }
 
+/** Import flow: step 1 — pick + validate the backup; the confirm dialog renders from store.pendingImport. */
 function openImportConfirm() {
   store.clearError()
-  showImportConfirm.value = true
+  void store.previewImport()
 }
 
+/** Import flow: step 2 — wipe the folder, reinstall addons, restore settings. */
 async function confirmImport() {
-  showImportConfirm.value = false
-  const result = await store.importSettings()
+  const result = await store.confirmImport()
   if (result) importSummary.value = result
 }
 </script>
@@ -143,23 +143,40 @@ async function confirmImport() {
       </div>
     </div>
 
-    <!-- Import settings: confirm overwrite -->
+    <!-- Import settings: confirm — shows once a backup zip has been picked & validated -->
     <div
-      v-if="showImportConfirm"
+      v-if="store.pendingImport"
       class="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50"
-      @click.self="showImportConfirm = false"
+      @click.self="store.cancelImport"
     >
       <div class="eso-card rounded-sm p-5 w-full max-w-lg">
         <h3 class="!text-lg !my-0 mb-3 text-gold-bright">Import settings</h3>
-        <p class="text-sm text-parchment-dim mb-2 -mt-1">Pick a backup zip to restore. This will:</p>
+        <p class="text-sm text-parchment-dim mb-2 -mt-1">
+          This backup contains <strong>{{ store.pendingImport.addons.length }}</strong> addon(s). Importing will:
+        </p>
         <ul class="text-sm text-parchment-dim list-disc pl-5 space-y-1 mb-3">
-          <li>Replace the tracked-addons list with the one from the backup.</li>
+          <li>
+            <strong>Wipe the AddOns folder</strong> — every addon currently there will be deleted, including untracked
+            ones.
+          </li>
+          <li>Re-download and install each addon from the backup.</li>
           <li>Overwrite <code class="text-xs">SavedVariables</code> files with the backup's versions.</li>
           <li>Overwrite <code class="text-xs">UserSettings.txt</code> if the backup contains it.</li>
         </ul>
+
+        <div v-if="store.pendingImport.addons.length > 0" class="max-h-40 overflow-y-auto mb-3">
+          <p class="text-xs text-parchment-faint italic mb-1">Addons to install:</p>
+          <ul class="text-xs text-parchment-dim columns-2 gap-4">
+            <li v-for="a in store.pendingImport.addons" :key="a.uid" class="truncate" :title="a.name">
+              {{ a.name }}
+            </li>
+          </ul>
+        </div>
+
         <p class="text-xs text-parchment-faint italic">
-          Existing settings that would be overwritten are moved to a timestamped
-          <code class="text-xs">SavedVariables.bak-*</code> folder first, so nothing is lost.
+          Existing SavedVariables that would be overwritten are moved to a timestamped
+          <code class="text-xs">SavedVariables.bak-*</code> folder first, so nothing is lost. The AddOns folder itself
+          is <em>not</em> backed up — addons are re-downloaded from ESOUI.
         </p>
 
         <p v-if="store.error" class="text-sm text-blood-bright mt-3">
@@ -168,8 +185,26 @@ async function confirmImport() {
         </p>
 
         <div class="flex justify-end gap-2 mt-4">
-          <button class="btn !my-0" @click="showImportConfirm = false">Cancel</button>
-          <button class="btn btn-primary !my-0" :disabled="store.loading" @click="confirmImport">Choose backup…</button>
+          <button class="btn !my-0" @click="store.cancelImport">Cancel</button>
+          <button class="btn btn-primary !my-0" :disabled="store.loading" @click="confirmImport">
+            Wipe &amp; import
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Import settings: progress while wiping + reinstalling -->
+    <div v-if="store.importProgress" class="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
+      <div class="eso-card rounded-sm p-5 w-full max-w-lg">
+        <h3 class="!text-lg !my-0 mb-3 text-gold-bright">Importing settings…</h3>
+        <p class="text-sm text-parchment-dim mb-3">
+          Installing addon {{ store.importProgress.done }} of {{ store.importProgress.total }}
+        </p>
+        <div class="h-2 w-full bg-eso-bg rounded-sm overflow-hidden">
+          <div
+            class="h-full bg-gold rounded-sm transition-all"
+            :style="{ width: `${(store.importProgress.done / Math.max(store.importProgress.total, 1)) * 100}%` }"
+          />
         </div>
       </div>
     </div>
@@ -183,17 +218,29 @@ async function confirmImport() {
       <div class="eso-card rounded-sm p-5 w-full max-w-lg">
         <h3 class="!text-lg !my-0 mb-3 text-gold-bright">Settings imported</h3>
         <ul class="text-sm text-parchment-dim list-disc pl-5 space-y-1 mb-3">
+          <li>{{ importSummary.addonCount }} addon(s) installed from the backup.</li>
           <li>{{ importSummary.restoredSavedVariables }} SavedVariables file(s) restored.</li>
           <li>
             {{
               importSummary.restoredUserSettings ? 'UserSettings.txt restored.' : 'No UserSettings.txt in the backup.'
             }}
           </li>
-          <li>{{ importSummary.addonCount }} addon(s) now tracked.</li>
           <li v-if="importSummary.backupDir">
             Previous settings backed up to <code class="text-xs break-all">{{ importSummary.backupDir }}</code>
           </li>
         </ul>
+
+        <div v-if="importSummary.installFailures.length > 0" class="mb-3">
+          <p class="text-sm text-blood-bright mb-1">
+            {{ importSummary.installFailures.length }} addon(s) failed to install:
+          </p>
+          <ul class="text-xs text-parchment-dim list-disc pl-5 space-y-0.5 max-h-32 overflow-y-auto">
+            <li v-for="f in importSummary.installFailures" :key="f.name">
+              <strong>{{ f.name }}</strong> — {{ f.error }}
+            </li>
+          </ul>
+        </div>
+
         <div class="flex justify-end gap-2 mt-4">
           <button class="btn btn-primary !my-0" @click="importSummary = null">OK</button>
         </div>

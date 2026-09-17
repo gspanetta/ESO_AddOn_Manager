@@ -1,4 +1,4 @@
-import { exists, remove } from '@tauri-apps/plugin-fs'
+import { exists, readDir, remove } from '@tauri-apps/plugin-fs'
 import { downloadAndExtractZip, extractDependencies } from './zip'
 import { upsertInstalled, removeInstalledRecord } from './installed'
 import { getEntryByUid } from './filelist'
@@ -27,10 +27,7 @@ export interface InstallContext {
  * Returns the list of installed addon records (the primary addon plus any
  * dependencies that were installed).
  */
-export async function installAddon(
-  entry: FileListEntry,
-  ctx: InstallContext,
-): Promise<InstalledAddon[]> {
+export async function installAddon(entry: FileListEntry, ctx: InstallContext): Promise<InstalledAddon[]> {
   const installed: InstalledAddon[] = []
 
   const directory = await downloadAndExtractZip(entry.UID, ctx.addonPath)
@@ -75,10 +72,7 @@ export async function removeAddon(addon: InstalledAddon, addonPath: string): Pro
  * Compare installed addons against the filelist and report which ones have a
  * newer version available (upstream UIDate greater than the installed date).
  */
-export function checkUpdates(
-  installed: InstalledAddon[],
-  filelist: FileListEntry[],
-): Record<number, boolean> {
+export function checkUpdates(installed: InstalledAddon[], filelist: FileListEntry[]): Record<number, boolean> {
   const result: Record<number, boolean> = {}
   for (const addon of installed) {
     const entry = getEntryByUid(filelist, addon.uid)
@@ -96,7 +90,7 @@ export function checkUpdates(
 export async function updateAddon(
   addon: InstalledAddon,
   addonPath: string,
-  filelist: FileListEntry[],
+  filelist: FileListEntry[]
 ): Promise<InstalledAddon | null> {
   const entry = getEntryByUid(filelist, addon.uid)
   if (!entry) return null
@@ -113,7 +107,7 @@ export async function updateAddon(
 export async function updateAll(
   installed: InstalledAddon[],
   addonPath: string,
-  filelist: FileListEntry[],
+  filelist: FileListEntry[]
 ): Promise<InstalledAddon[]> {
   const updated: InstalledAddon[] = []
   for (const addon of installed) {
@@ -124,4 +118,62 @@ export async function updateAll(
     }
   }
   return updated
+}
+
+/** Progress callback fired by `reinstallAddons` after each addon install. */
+export type ReinstallProgress = (done: number, total: number, current: InstalledAddon) => void
+
+export interface ReinstallResult {
+  /** Addons successfully re-downloaded and extracted. */
+  installed: InstalledAddon[]
+  /** Records that could not be reinstalled (no filelist match / download failed). */
+  failures: { addon: InstalledAddon; error: string }[]
+}
+
+/**
+ * Wipe the addon folder completely and re-install every record from a backup
+ * via download + extract. Records whose UID no longer exists in the filelist,
+ * or whose download fails, are skipped and reported as failures — the rest
+ * still install.
+ *
+ * `onProgress` is invoked after each individual addon install attempt so the
+ * UI can show a progress bar. Existing dependencies are *not* re-resolved:
+ * the backup's installed.json is authoritative for what should be present.
+ */
+export async function reinstallAddons(
+  records: InstalledAddon[],
+  addonPath: string,
+  filelist: FileListEntry[],
+  onProgress?: ReinstallProgress
+): Promise<ReinstallResult> {
+  // Wipe: delete everything currently in the addon folder.
+  if (await exists(addonPath)) {
+    const entries = await readDir(addonPath)
+    for (const entry of entries) {
+      await remove(joinSync(addonPath, entry.name), { recursive: true })
+    }
+  }
+
+  const installed: InstalledAddon[] = []
+  const failures: { addon: InstalledAddon; error: string }[] = []
+  const total = records.length
+
+  for (let i = 0; i < total; i++) {
+    const record = records[i]
+    try {
+      const entry = getEntryByUid(filelist, record.uid)
+      if (!entry) {
+        failures.push({ addon: record, error: 'no matching addon in the current filelist' })
+        continue
+      }
+      const directory = await downloadAndExtractZip(entry.UID, addonPath)
+      installed.push(toInstalledAddon(entry, directory))
+    } catch (e) {
+      failures.push({ addon: record, error: e instanceof Error ? e.message : String(e) })
+    } finally {
+      onProgress?.(i + 1, total, record)
+    }
+  }
+
+  return { installed, failures }
 }

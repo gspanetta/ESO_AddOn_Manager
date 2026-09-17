@@ -6,16 +6,19 @@ import { loadInstalled } from '@/lib/installed'
 import { reconcileInstalledWithFolder, type ReconcileResult } from '@/lib/import'
 import {
   exportSettings as exportSettingsLib,
-  importSettings as importSettingsLib,
+  readBackup,
+  restoreSettings,
   defaultBackupFileName,
   type BackupExportResult,
   type BackupImportResult,
+  type ParsedBackup,
 } from '@/lib/backup'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { readFile, writeFile } from '@tauri-apps/plugin-fs'
 import {
   checkUpdates as checkUpdatesLib,
   installAddon as installAddonLib,
+  reinstallAddons as reinstallAddonsLib,
   removeAddon as removeAddonLib,
   updateAddon as updateAddonLib,
   updateAll as updateAllLib,
@@ -27,6 +30,12 @@ interface PendingDepChoice {
   dep: string
   candidates: FileListEntry[]
   resolve: (entry: FileListEntry | null) => void
+}
+
+/** Progress state for an in-flight settings import (drives a progress modal). */
+interface ImportProgress {
+  done: number
+  total: number
 }
 
 export const useAddonsStore = defineStore('addons', {
@@ -53,6 +62,10 @@ export const useAddonsStore = defineStore('addons', {
     error: null as string | null,
     /** A dependency choice awaiting user input (drives a modal in the UI). */
     pendingDepChoice: null as PendingDepChoice | null,
+    /** Progress of an in-flight settings import, or null when not importing. */
+    importProgress: null as ImportProgress | null,
+    /** Parsed backup awaiting user confirmation, or null. */
+    pendingImport: null as ParsedBackup | null,
   }),
 
   getters: {
@@ -269,15 +282,14 @@ export const useAddonsStore = defineStore('addons', {
     },
 
     /**
-     * Import a previously exported backup zip (chosen via an open dialog),
-     * restoring SavedVariables + UserSettings.txt and replacing the installed
-     * DB. Existing SavedVariables that would be overwritten are moved to a
-     * timestamped backup folder first. Returns the import summary, or null if
-     * the user cancelled or the import failed.
+     * Step 1 of the import flow: pick a backup zip, parse and validate it
+     * (no filesystem changes), and stash the parsed backup in `pendingImport`
+     * so the UI can show a confirmation dialog listing the addons to install.
+     * Returns the parsed backup, or null if the user cancelled or the file is
+     * invalid (error is set in that case).
      */
-    async importSettings(): Promise<BackupImportResult | null> {
+    async previewImport(): Promise<ParsedBackup | null> {
       if (!this.addonPath) return null
-      this.loading = true
       this.error = null
       try {
         const selected = await open({
@@ -286,16 +298,67 @@ export const useAddonsStore = defineStore('addons', {
         })
         if (typeof selected !== 'string' || !selected) return null
         const bytes = await readFile(selected)
-        const result = await importSettingsLib(bytes, this.addonPath)
+        const backup = readBackup(bytes)
+        this.pendingImport = backup
+        return backup
+      } catch (e) {
+        this.setError(e)
+        return null
+      }
+    },
+
+    /**
+     * Step 2 of the import flow: wipe the addon folder, re-install every addon
+     * from the pending backup (with progress), then restore SavedVariables +
+     * UserSettings.txt and persist the DB to the actually-installed list.
+     * Returns the import summary plus any per-addon install failures, or null
+     * if there is no pending import.
+     */
+    async confirmImport(): Promise<
+      (BackupImportResult & { installFailures: { name: string; error: string }[] }) | null
+    > {
+      const backup = this.pendingImport
+      if (!backup || !this.addonPath) return null
+      const addonPath = this.addonPath
+      this.loading = true
+      this.error = null
+      this.importProgress = backup.addons.length > 0 ? { done: 0, total: backup.addons.length } : null
+      this.pendingImport = null
+      try {
+        // Ensure the filelist is available to resolve UIDs for re-download.
+        if (!this.filelist) {
+          this.filelist = await downloadFilelist()
+          this.filelistLoadedAt = Date.now()
+        }
+
+        const { installed, failures } = await reinstallAddonsLib(
+          backup.addons,
+          addonPath,
+          this.filelist,
+          (done, total) => {
+            this.importProgress = { done, total }
+          }
+        )
+
+        const result = await restoreSettings(backup, addonPath, { addons: installed })
         this.installed = await loadInstalled()
         this.refreshUpdateMap()
-        return result
+        return {
+          ...result,
+          installFailures: failures.map(f => ({ name: f.addon.name, error: f.error })),
+        }
       } catch (e) {
         this.setError(e)
         return null
       } finally {
         this.loading = false
+        this.importProgress = null
       }
+    },
+
+    /** Abort the settings import at the confirmation step. */
+    cancelImport() {
+      this.pendingImport = null
     },
 
     /**

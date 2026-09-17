@@ -33,8 +33,10 @@ network through Tauri plugins.
   present on disk are added to the tracked list, and tracked addons no longer in
   the folder are removed.
 - **Settings backup & restore** — export the tracked-addon list, the entire
-  `SavedVariables` folder, and `UserSettings.txt` into a single zip; import it
-  back later (existing settings are moved to a timestamped backup folder first).
+  `SavedVariables` folder, and `UserSettings.txt` into a single zip; importing
+  wipes the AddOns folder, re-downloads every addon from the backup (with a
+  progress bar), and restores the settings files (existing SavedVariables are
+  moved to a timestamped backup folder first).
 - **Elder Scrolls-inspired theme** — dark stone/leather UI with gold accents, Cinzel
   display headings, and addon thumbnails next to names.
 
@@ -95,12 +97,12 @@ The app keeps its own data separate from the user's addon folder:
 - **`src/lib/`** — the ported CLI logic, one module per concern:
   - `http.ts` — download the filelist; fetch addon zip bytes (with status/content-type checks)
   - `zip.ts` — `fflate` decompression + `plugin-fs` extraction, with path-traversal hardening (rejects absolute/`..` entries); `## DependsOn:` parsing
-  - `backup.ts` — settings export/import: zips `manifest.json` + `installed.json` + `UserSettings.txt` + `SavedVariables/**` via `fflate`; on import, backs up overwritten files to `SavedVariables.bak-<timestamp>/`
+  - `backup.ts` — settings export/import: zips `manifest.json` + `installed.json` + `UserSettings.txt` + `SavedVariables/**` via `fflate`; import is split into `readBackup` (parse/validate, no side effects) and `restoreSettings` (move overwritten SavedVariables to `SavedVariables.bak-<timestamp>/`, write files, persist the actually-installed DB list)
   - `filelist.ts` — cache load, name search, UID lookup, thumbnail URL
   - `installed.ts` — installed DB load/save/upsert/remove
   - `config.ts` — persisted app config (plugin-store)
   - `paths.ts` — app-data path helpers + sync `join`/`dirname`/`safeRelative`
-  - `addonManager.ts` — orchestrators: `installAddon`, `removeAddon`, `checkUpdates`, `updateAddon`, `updateAll`
+  - `addonManager.ts` — orchestrators: `installAddon`, `removeAddon`, `checkUpdates`, `updateAddon`, `updateAll`, `reinstallAddons` (folder wipe + sequential reinstall with progress, used by the settings import)
   - `import.ts` — `reconcileInstalledWithFolder` (prune + import on Save)
   - `types.ts` — `FileListEntry` (API shape), `InstalledAddon` (our schema)
 - **`src/stores/addons.ts`** — Pinia store holding all reactive state and async actions.

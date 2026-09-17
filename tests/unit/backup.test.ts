@@ -46,6 +46,32 @@ function installed(overrides: Partial<InstalledAddon> = {}): InstalledAddon {
   }
 }
 
+/** Build a backup zip the way exportSettings does, for import tests. */
+function makeBackupZip(
+  overrides: {
+    manifest?: object
+    svFiles?: Record<string, Uint8Array>
+    userSettings?: Uint8Array | null
+    installedJson?: string | null
+  } = {}
+): Uint8Array {
+  const entries: Record<string, Uint8Array> = {
+    'manifest.json': strToU8(
+      JSON.stringify(overrides.manifest ?? { formatVersion: 1, appVersion: '1.0.0', exportedAt: 0, addons: [] })
+    ),
+  }
+  if (overrides.installedJson !== null) {
+    entries['installed.json'] = strToU8(overrides.installedJson ?? JSON.stringify([installed()]))
+  }
+  if (overrides.userSettings !== null) {
+    entries['UserSettings.txt'] = overrides.userSettings ?? strToU8('user settings')
+  }
+  for (const [k, v] of Object.entries(overrides.svFiles ?? {})) {
+    entries[`SavedVariables/${k}`] = v
+  }
+  return zipSync(entries)
+}
+
 describe('settings backup', () => {
   beforeEach(() => {
     vi.resetModules()
@@ -117,32 +143,54 @@ describe('settings backup', () => {
     })
   })
 
-  describe('import', () => {
-    function makeBackup(
-      overrides: {
-        manifest?: object
-        svFiles?: Record<string, Uint8Array>
-        userSettings?: Uint8Array | null
-        installedJson?: string | null
-      } = {}
-    ): Uint8Array {
-      const entries: Record<string, Uint8Array> = {
-        'manifest.json': strToU8(
-          JSON.stringify(overrides.manifest ?? { formatVersion: 1, appVersion: '1.0.0', exportedAt: 0, addons: [] })
-        ),
-        'installed.json': strToU8(overrides.installedJson ?? JSON.stringify([installed()])),
-      }
-      if (overrides.userSettings !== null) {
-        entries['UserSettings.txt'] = overrides.userSettings ?? strToU8('user settings')
-      }
-      for (const [k, v] of Object.entries(overrides.svFiles ?? {})) {
-        entries[`SavedVariables/${k}`] = v
-      }
-      return zipSync(entries)
-    }
+  describe('readBackup (parse + validate, no filesystem side effects)', () => {
+    it('parses the manifest, addons, SavedVariables and UserSettings', async () => {
+      const { readBackup } = await import('@/lib/backup')
+      const bytes = makeBackupZip({
+        svFiles: { 'AddonOne.lua': strToU8('sv') },
+        installedJson: JSON.stringify([installed(), installed({ uid: 2, name: 'Two' })]),
+      })
 
-    it('restores SavedVariables + UserSettings and replaces the installed DB, backing up existing files', async () => {
-      const { importSettings } = await import('@/lib/backup')
+      const parsed = readBackup(bytes)
+
+      expect(parsed.manifest.formatVersion).toBe(1)
+      expect(parsed.addons).toHaveLength(2)
+      expect(parsed.savedVariables).toHaveLength(1)
+      expect(parsed.savedVariables[0].rel).toBe('AddonOne.lua')
+      expect(parsed.userSettings).not.toBeNull()
+      expect(parsed.skippedUnsafe).toBe(0)
+      // no filesystem was touched
+      expect(existsMock).not.toHaveBeenCalled()
+      expect(writeFileMock).not.toHaveBeenCalled()
+    })
+
+    it('rejects zips without a manifest or with a newer format version', async () => {
+      const { readBackup } = await import('@/lib/backup')
+
+      const noManifest = zipSync({ 'foo.txt': strToU8('nope') })
+      expect(() => readBackup(noManifest)).toThrow('manifest')
+
+      const tooNew = makeBackupZip({ manifest: { formatVersion: 999, appVersion: 'x', exportedAt: 0, addons: [] } })
+      expect(() => readBackup(tooNew)).toThrow('format version')
+    })
+
+    it('skips unsafe SavedVariables entries (path traversal)', async () => {
+      const { readBackup } = await import('@/lib/backup')
+      const bytes = makeBackupZip({
+        svFiles: { '../evil.lua': strToU8('bad'), 'good.lua': strToU8('good') },
+      })
+
+      const parsed = readBackup(bytes)
+
+      expect(parsed.savedVariables).toHaveLength(1)
+      expect(parsed.savedVariables[0].rel).toBe('good.lua')
+      expect(parsed.skippedUnsafe).toBe(1)
+    })
+  })
+
+  describe('restoreSettings (write to disk)', () => {
+    it('backs up existing SavedVariables, writes restored files and saves the addon list', async () => {
+      const { readBackup, restoreSettings } = await import('@/lib/backup')
 
       // SavedVariables exists with two files (one overlaps the backup, one is stale)
       existsMock.mockImplementation(async (p: string) => {
@@ -162,11 +210,12 @@ describe('settings backup', () => {
         return []
       })
 
-      const bytes = makeBackup({
-        svFiles: { 'AddonOne.lua': strToU8('new sv'), 'New.lua': strToU8('brand new') },
-        installedJson: JSON.stringify([installed()]),
-      })
-      const result = await importSettings(bytes, '/eso/live/AddOns')
+      const parsed = readBackup(
+        makeBackupZip({
+          svFiles: { 'AddonOne.lua': strToU8('new sv'), 'New.lua': strToU8('brand new') },
+        })
+      )
+      const result = await restoreSettings(parsed, '/eso/live/AddOns')
 
       expect(result.restoredSavedVariables).toBe(2)
       expect(result.restoredUserSettings).toBe(true)
@@ -185,52 +234,37 @@ describe('settings backup', () => {
       const renamed = renameMock.mock.calls.map(([src]) => src as string).sort()
       expect(renamed).toEqual(['/eso/live/SavedVariables/AddonOne.lua', '/eso/live/SavedVariables/Old.lua'])
 
+      expect(saveInstalledMock).toHaveBeenCalledWith(parsed.addons)
+    })
+
+    it('persists the caller-provided addon list instead of the backup snapshot when given', async () => {
+      const { readBackup, restoreSettings } = await import('@/lib/backup')
+      existsMock.mockResolvedValue(false)
+      const parsed = readBackup(
+        makeBackupZip({ installedJson: JSON.stringify([installed(), installed({ uid: 2, name: 'Two' })]) })
+      )
+
+      // simulate: one of the two addons failed to reinstall, so only one is on disk
+      const actuallyInstalled = [installed()]
+      const result = await restoreSettings(parsed, '/eso/live/AddOns', { addons: actuallyInstalled })
+
+      expect(saveInstalledMock).toHaveBeenCalledWith(actuallyInstalled)
+      expect(result.addonCount).toBe(1)
+    })
+
+    it('handles backups without UserSettings.txt or SavedVariables', async () => {
+      const { readBackup, restoreSettings } = await import('@/lib/backup')
+      existsMock.mockResolvedValue(false)
+      const parsed = readBackup(
+        makeBackupZip({ svFiles: {}, userSettings: null, installedJson: JSON.stringify([installed()]) })
+      )
+
+      const result = await restoreSettings(parsed, '/eso/live/AddOns')
+
+      expect(result.restoredSavedVariables).toBe(0)
+      expect(result.restoredUserSettings).toBe(false)
+      expect(result.backupDir).toBeNull()
       expect(saveInstalledMock).toHaveBeenCalledWith([installed()])
-    })
-
-    it('rejects zips without a manifest', async () => {
-      const { importSettings } = await import('@/lib/backup')
-      const bytes = zipSync({ 'foo.txt': strToU8('nope') })
-      await expect(importSettings(bytes, '/eso/live/AddOns')).rejects.toThrow('manifest')
-    })
-
-    it('rejects backups from a newer format version', async () => {
-      const { importSettings } = await import('@/lib/backup')
-      const bytes = makeBackup({ manifest: { formatVersion: 999, appVersion: 'x', exportedAt: 0, addons: [] } })
-      await expect(importSettings(bytes, '/eso/live/AddOns')).rejects.toThrow('format version')
-    })
-
-    it('skips unsafe SavedVariables entries (path traversal)', async () => {
-      const { importSettings } = await import('@/lib/backup')
-      existsMock.mockResolvedValue(false)
-      const bytes = makeBackup({
-        svFiles: {
-          '../evil.lua': strToU8('bad'),
-          'good.lua': strToU8('good'),
-        },
-        userSettings: null,
-        installedJson: null,
-      })
-      const result = await importSettings(bytes, '/eso/live/AddOns')
-
-      expect(result.restoredSavedVariables).toBe(1)
-      expect(result.skippedUnsafe).toBe(1)
-      const written = writeFileMock.mock.calls.map(([p]) => p as string)
-      expect(written).toEqual(['/eso/live/SavedVariables/good.lua'])
-    })
-
-    it('keeps the current installed DB when the backup has none', async () => {
-      const { importSettings } = await import('@/lib/backup')
-      existsMock.mockResolvedValue(false)
-      const bytes = makeBackup({ svFiles: {}, userSettings: null, installedJson: null })
-      // remove the default installed.json entry
-      const entries = unzipSync(bytes)
-      delete entries['installed.json']
-      const bare = zipSync(entries)
-
-      const result = await importSettings(bare, '/eso/live/AddOns')
-      expect(result.addonCount).toBe(0)
-      expect(saveInstalledMock).not.toHaveBeenCalled()
     })
   })
 })

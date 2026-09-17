@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FileListEntry, InstalledAddon } from '@/lib/types'
 
 const existsMock = vi.fn()
+const readDirMock = vi.fn()
 const removeMock = vi.fn()
 const downloadAndExtractZipMock = vi.fn()
 const extractDependenciesMock = vi.fn()
@@ -11,6 +12,7 @@ const sepMock = vi.fn(() => '/')
 
 vi.mock('@tauri-apps/plugin-fs', () => ({
   exists: existsMock,
+  readDir: readDirMock,
   remove: removeMock,
 }))
 
@@ -61,6 +63,7 @@ describe('addon manager', () => {
   beforeEach(() => {
     vi.resetModules()
     existsMock.mockReset()
+    readDirMock.mockReset()
     removeMock.mockReset()
     downloadAndExtractZipMock.mockReset()
     extractDependenciesMock.mockReset()
@@ -85,7 +88,7 @@ describe('addon manager', () => {
         installDeps: true,
         filelist: [primary, dependency],
         resolveDependency,
-      }),
+      })
     ).resolves.toEqual([
       installed({ uid: 1, name: 'Addon One', directory: 'AddonOne' }),
       installed({ uid: 2, name: 'LibFoo', version: '2.0.0', directory: 'LibFoo' }),
@@ -135,19 +138,88 @@ describe('addon manager', () => {
     const { checkUpdates, updateAddon, updateAll } = await import('@/lib/addonManager')
     const oldAddon = installed({ uid: 1, date: 1 })
     const currentAddon = installed({ uid: 2, date: 10 })
-    const filelist = [
-      fileEntry({ UID: 1, UIDate: 2, UIVersion: '2.0.0' }),
-      fileEntry({ UID: 2, UIDate: 10 }),
-    ]
+    const filelist = [fileEntry({ UID: 1, UIDate: 2, UIVersion: '2.0.0' }), fileEntry({ UID: 2, UIDate: 10 })]
     downloadAndExtractZipMock.mockResolvedValue('AddonOne')
 
     expect(checkUpdates([oldAddon, currentAddon], filelist)).toEqual({ 1: true })
     await expect(updateAddon(oldAddon, '/addons', filelist)).resolves.toEqual(
-      installed({ uid: 1, version: '2.0.0', date: 2, directory: 'AddonOne' }),
+      installed({ uid: 1, version: '2.0.0', date: 2, directory: 'AddonOne' })
     )
     await expect(updateAddon(installed({ uid: 99 }), '/addons', filelist)).resolves.toBeNull()
     await expect(updateAll([oldAddon, currentAddon], '/addons', filelist)).resolves.toEqual([
       installed({ uid: 1, version: '2.0.0', date: 2, directory: 'AddonOne' }),
     ])
+  })
+
+  describe('reinstallAddons (folder wipe for settings import)', () => {
+    it('wipes the addon folder, re-installs every record, and reports progress', async () => {
+      const { reinstallAddons } = await import('@/lib/addonManager')
+      const records = [installed({ uid: 1, name: 'Addon One' }), installed({ uid: 2, name: 'Addon Two' })]
+      const filelist = [
+        fileEntry({ UID: 1, UIName: 'Addon One' }),
+        fileEntry({ UID: 2, UIName: 'Addon Two', UIVersion: '2.0.0' }),
+      ]
+      existsMock.mockResolvedValue(true)
+      readDirMock.mockResolvedValue([
+        { name: 'AddonOne', isDirectory: true },
+        { name: 'OldUntracked', isDirectory: true },
+        { name: 'stray.txt', isDirectory: false },
+      ])
+      downloadAndExtractZipMock.mockResolvedValueOnce('AddonOne').mockResolvedValueOnce('AddonTwo')
+      const onProgress = vi.fn()
+
+      const result = await reinstallAddons(records, '/addons', filelist, onProgress)
+
+      // folder was wiped first (everything currently there, untracked included)
+      expect(removeMock).toHaveBeenCalledWith('/addons/AddonOne', { recursive: true })
+      expect(removeMock).toHaveBeenCalledWith('/addons/OldUntracked', { recursive: true })
+      expect(removeMock).toHaveBeenCalledWith('/addons/stray.txt', { recursive: true })
+
+      // both reinstalled with fresh metadata from the filelist
+      expect(result.installed).toEqual([
+        installed({ uid: 1, name: 'Addon One', directory: 'AddonOne' }),
+        installed({ uid: 2, name: 'Addon Two', version: '2.0.0', directory: 'AddonTwo' }),
+      ])
+      expect(result.failures).toEqual([])
+
+      // progress fired once per record, in order, with running counts
+      expect(onProgress).toHaveBeenCalledTimes(2)
+      expect(onProgress).toHaveBeenNthCalledWith(1, 1, 2, records[0])
+      expect(onProgress).toHaveBeenNthCalledWith(2, 2, 2, records[1])
+    })
+
+    it('reports records missing from the filelist or failing to download as failures and keeps going', async () => {
+      const { reinstallAddons } = await import('@/lib/addonManager')
+      const records = [
+        installed({ uid: 1, name: 'Good One' }),
+        installed({ uid: 99, name: 'Gone From Site' }),
+        installed({ uid: 2, name: 'Broken Download' }),
+      ]
+      const filelist = [fileEntry({ UID: 1 }), fileEntry({ UID: 2 })]
+      existsMock.mockResolvedValue(true)
+      readDirMock.mockResolvedValue([])
+      downloadAndExtractZipMock.mockResolvedValueOnce('GoodOne').mockRejectedValueOnce(new Error('HTTP 500'))
+
+      const result = await reinstallAddons(records, '/addons', filelist)
+
+      // record metadata is refreshed from the filelist (authoritative), not the backup
+      expect(result.installed).toEqual([installed({ uid: 1, name: 'Addon One', directory: 'GoodOne' })])
+      expect(result.failures).toEqual([
+        { addon: records[1], error: 'no matching addon in the current filelist' },
+        { addon: records[2], error: 'HTTP 500' },
+      ])
+    })
+
+    it('still installs when the addon folder does not exist yet', async () => {
+      const { reinstallAddons } = await import('@/lib/addonManager')
+      const records = [installed({ uid: 1 })]
+      existsMock.mockResolvedValue(false)
+      downloadAndExtractZipMock.mockResolvedValue('AddonOne')
+
+      const result = await reinstallAddons(records, '/addons', [fileEntry()])
+
+      expect(removeMock).not.toHaveBeenCalled()
+      expect(result.installed).toHaveLength(1)
+    })
   })
 })

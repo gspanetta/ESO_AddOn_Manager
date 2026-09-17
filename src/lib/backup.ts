@@ -54,6 +54,20 @@ export interface BackupImportResult {
   skippedUnsafe: number
 }
 
+/** A parsed, validated backup — no filesystem side effects yet. */
+export interface ParsedBackup {
+  /** Manifest metadata from manifest.json. */
+  manifest: BackupManifest
+  /** Addon records from installed.json (empty if missing/corrupt). */
+  addons: InstalledAddon[]
+  /** SavedVariables files as { rel path under SavedVariables, raw bytes }. */
+  savedVariables: { rel: string; data: Uint8Array }[]
+  /** Raw UserSettings.txt bytes, or null if the backup has none. */
+  userSettings: Uint8Array | null
+  /** Zip entries skipped as unsafe (absolute / path-traversal). */
+  skippedUnsafe: number
+}
+
 /** Absolute path to the SavedVariables folder (sibling of the AddOns folder). */
 export function savedVariablesPath(addonPath: string): string {
   return joinSync(dirname(addonPath), 'SavedVariables')
@@ -125,15 +139,11 @@ export async function exportSettings(addonPath: string): Promise<{ bytes: Uint8A
 }
 
 /**
- * Restore a backup zip:
- *  1. Parse and validate the manifest (format version).
- *  2. Back up any existing SavedVariables / installed.json that would be
- *     overwritten into `SavedVariables.bak-<timestamp>/` (rename, i.e. move).
- *  3. Write SavedVariables files and UserSettings.txt to the live folder
- *     (rejecting absolute / `..` zip entries, same hardening as addon zips).
- *  4. Replace the installed DB with the backup's `installed.json` snapshot.
+ * Parse and validate a backup zip **without touching the filesystem**.
+ * Returns everything needed for (a) a confirmation dialog (how many addons,
+ * which names) and (b) the actual restore (`restoreSettings`).
  */
-export async function importSettings(bytes: Uint8Array, addonPath: string): Promise<BackupImportResult> {
+export function readBackup(bytes: Uint8Array): ParsedBackup {
   const entries = unzipSync(bytes)
 
   const manifestBytes = entries[MANIFEST_ENTRY]
@@ -152,9 +162,7 @@ export async function importSettings(bytes: Uint8Array, addonPath: string): Prom
     )
   }
 
-  // Collect validated SavedVariables entries first so nothing is moved
-  // or written if the zip turns out to be unusable.
-  const svFiles: { rel: string; data: Uint8Array }[] = []
+  const savedVariables: { rel: string; data: Uint8Array }[] = []
   let skippedUnsafe = 0
   for (const [entryPath, data] of Object.entries(entries)) {
     if (!entryPath.startsWith(SAVED_VARIABLES_PREFIX)) continue
@@ -163,10 +171,49 @@ export async function importSettings(bytes: Uint8Array, addonPath: string): Prom
       skippedUnsafe++
       continue
     }
-    svFiles.push({ rel, data })
+    savedVariables.push({ rel, data })
   }
-  const userSettingsData = entries[USER_SETTINGS_ENTRY] ?? null
-  const installedData = entries[INSTALLED_ENTRY] ?? null
+
+  let addons: InstalledAddon[] = []
+  const installedData = entries[INSTALLED_ENTRY]
+  if (installedData) {
+    try {
+      const parsed = JSON.parse(strFromU8(installedData))
+      if (Array.isArray(parsed)) addons = parsed as InstalledAddon[]
+    } catch {
+      // corrupt installed.json inside the backup: treat as "no addons"
+    }
+  }
+
+  return {
+    manifest,
+    addons,
+    savedVariables,
+    userSettings: entries[USER_SETTINGS_ENTRY] ?? null,
+    skippedUnsafe,
+  }
+}
+
+/**
+ * Restore a parsed backup:
+ *  1. Back up any existing SavedVariables that would be overwritten (or that
+ *     are not part of the backup and would otherwise linger) into
+ *     `SavedVariables.bak-<timestamp>/` (rename, i.e. move).
+ *  2. Write SavedVariables files and UserSettings.txt to the live folder
+ *     (entries were already validated by `readBackup`).
+ *  3. Replace the installed DB with the backup's `installed.json` snapshot —
+ *     or, if `options.addons` is given (e.g. after a folder wipe + reinstall),
+ *     with that final list instead, so the DB matches what is actually on disk.
+ */
+export async function restoreSettings(
+  backup: ParsedBackup,
+  addonPath: string,
+  options: { addons?: InstalledAddon[] } = {}
+): Promise<BackupImportResult> {
+  const { savedVariables: svFiles, userSettings: userSettingsData, skippedUnsafe } = backup
+  // The DB state to persist: caller's final list if provided (post-reinstall),
+  // otherwise the backup's snapshot verbatim.
+  const addonsToSave = options.addons ?? backup.addons
 
   // Back up whatever would be overwritten.
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19)
@@ -205,23 +252,12 @@ export async function importSettings(bytes: Uint8Array, addonPath: string): Prom
     restoredUserSettings = true
   }
 
-  let addonCount = 0
-  if (installedData) {
-    try {
-      const parsed = JSON.parse(strFromU8(installedData))
-      if (Array.isArray(parsed)) {
-        await saveInstalled(parsed as InstalledAddon[])
-        addonCount = parsed.length
-      }
-    } catch {
-      // corrupt installed.json inside the backup: keep the current DB
-    }
-  }
+  await saveInstalled(addonsToSave)
 
   return {
     restoredSavedVariables: svFiles.length,
     restoredUserSettings,
-    addonCount,
+    addonCount: addonsToSave.length,
     backupDir: backedUp.length > 0 ? backupDir : null,
     backedUp,
     skippedUnsafe,
