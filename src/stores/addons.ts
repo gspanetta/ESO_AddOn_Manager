@@ -5,6 +5,15 @@ import { loadFilelist, searchAddons, type FileListEntry } from '@/lib/filelist'
 import { loadInstalled } from '@/lib/installed'
 import { reconcileInstalledWithFolder, type ReconcileResult } from '@/lib/import'
 import {
+  exportSettings as exportSettingsLib,
+  importSettings as importSettingsLib,
+  defaultBackupFileName,
+  type BackupExportResult,
+  type BackupImportResult,
+} from '@/lib/backup'
+import { open, save } from '@tauri-apps/plugin-dialog'
+import { readFile, writeFile } from '@tauri-apps/plugin-fs'
+import {
   checkUpdates as checkUpdatesLib,
   installAddon as installAddonLib,
   removeAddon as removeAddonLib,
@@ -48,16 +57,18 @@ export const useAddonsStore = defineStore('addons', {
 
   getters: {
     /** True when no addon directory has been configured yet. */
-    needsSetup: (state) => state.addonPath === null,
+    needsSetup: state => state.addonPath === null,
     /** Has the filelist been loaded at least once this session? */
-    hasFilelist: (state) => state.filelist !== null && state.filelist.length > 0,
+    hasFilelist: state => state.filelist !== null && state.filelist.length > 0,
     /** Resolve a thumbnail URL for an installed addon by uid (fallback for records without a stored thumbnail). */
-    thumbForUid: (state) => (uid: number): string | null => {
-      if (!state.filelist) return null
-      const entry = state.filelist.find((e) => e.UID === uid)
-      const thumb = entry?.UIIMG_Thumbs?.[0]
-      return typeof thumb === 'string' && thumb ? thumb : null
-    },
+    thumbForUid:
+      state =>
+      (uid: number): string | null => {
+        if (!state.filelist) return null
+        const entry = state.filelist.find(e => e.UID === uid)
+        const thumb = entry?.UIIMG_Thumbs?.[0]
+        return typeof thumb === 'string' && thumb ? thumb : null
+      },
   },
 
   actions: {
@@ -163,7 +174,7 @@ export const useAddonsStore = defineStore('addons', {
           addonPath: this.addonPath,
           installDeps: this.installDeps,
           filelist: this.filelist,
-          resolveDependency: (dep) => this.resolveDependency(dep),
+          resolveDependency: dep => this.resolveDependency(dep),
         })
         this.installed = await loadInstalled()
         this.refreshUpdateMap()
@@ -232,6 +243,62 @@ export const useAddonsStore = defineStore('addons', {
     },
 
     /**
+     * Export tracked addons + SavedVariables + UserSettings.txt into a single
+     * zip chosen via a save dialog. Returns the export summary, or null if the
+     * user cancelled or the export failed.
+     */
+    async exportSettings(): Promise<BackupExportResult | null> {
+      if (!this.addonPath) return null
+      this.loading = true
+      this.error = null
+      try {
+        const target = await save({
+          defaultPath: defaultBackupFileName(),
+          filters: [{ name: 'ESO settings backup', extensions: ['zip'] }],
+        })
+        if (!target) return null
+        const { bytes, result } = await exportSettingsLib(this.addonPath)
+        await writeFile(target, bytes)
+        return result
+      } catch (e) {
+        this.setError(e)
+        return null
+      } finally {
+        this.loading = false
+      }
+    },
+
+    /**
+     * Import a previously exported backup zip (chosen via an open dialog),
+     * restoring SavedVariables + UserSettings.txt and replacing the installed
+     * DB. Existing SavedVariables that would be overwritten are moved to a
+     * timestamped backup folder first. Returns the import summary, or null if
+     * the user cancelled or the import failed.
+     */
+    async importSettings(): Promise<BackupImportResult | null> {
+      if (!this.addonPath) return null
+      this.loading = true
+      this.error = null
+      try {
+        const selected = await open({
+          multiple: false,
+          filters: [{ name: 'ESO settings backup', extensions: ['zip'] }],
+        })
+        if (typeof selected !== 'string' || !selected) return null
+        const bytes = await readFile(selected)
+        const result = await importSettingsLib(bytes, this.addonPath)
+        this.installed = await loadInstalled()
+        this.refreshUpdateMap()
+        return result
+      } catch (e) {
+        this.setError(e)
+        return null
+      } finally {
+        this.loading = false
+      }
+    },
+
+    /**
      * Resolve a dependency name to a filelist entry: auto-pick on a single
      * match, prompt the user when multiple candidates exist, skip on none.
      */
@@ -241,7 +308,7 @@ export const useAddonsStore = defineStore('addons', {
       if (candidates.length === 0) return null
       if (candidates.length === 1) return candidates[0]
       // multiple matches: ask the user via the pendingDepChoice modal
-      return new Promise<FileListEntry | null>((resolve) => {
+      return new Promise<FileListEntry | null>(resolve => {
         this.pendingDepChoice = { dep, candidates, resolve }
       })
     },

@@ -7,6 +7,7 @@
     "core:default",
     "shell:allow-open",
     "dialog:allow-open",
+    "dialog:allow-save",
     "store:default",
     "fs:default",
     "fs:allow-read-file",
@@ -14,6 +15,7 @@
     "fs:allow-read-dir",
     "fs:allow-mkdir",
     "fs:allow-remove",
+    "fs:allow-rename",
     "fs:allow-exists",
     "fs:allow-write-text-file",
     "fs:allow-read-text-file",
@@ -29,10 +31,7 @@
     },
     {
       "identifier": "http:default",
-      "allow": [
-        { "url": "https://api.mmoui.com/*" },
-        { "url": "https://www.esoui.com/*" }
-      ]
+      "allow": [{ "url": "https://api.mmoui.com/*" }, { "url": "https://www.esoui.com/*" }]
     }
   ]
 }

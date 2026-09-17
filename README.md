@@ -32,6 +32,9 @@ network through Tauri plugins.
 - **Folder reconciliation** — saving the AddOn folder scans it: addons already
   present on disk are added to the tracked list, and tracked addons no longer in
   the folder are removed.
+- **Settings backup & restore** — export the tracked-addon list, the entire
+  `SavedVariables` folder, and `UserSettings.txt` into a single zip; import it
+  back later (existing settings are moved to a timestamped backup folder first).
 - **Elder Scrolls-inspired theme** — dark stone/leather UI with gold accents, Cinzel
   display headings, and addon thumbnails next to names.
 
@@ -43,7 +46,7 @@ network through Tauri plugins.
 - **Tailwind CSS v4** — styling
 - **Vite** — dev server & bundler, with `unplugin-auto-import` / `unplugin-vue-components`
 - **Vitest** — unit testing
-- **fflate** — in-webview zip decompression
+- **fflate** — in-webview zip compression & decompression
 - **Tauri plugins**: `http`, `fs`, `dialog`, `store` (all v2)
 
 ## Quick start
@@ -92,6 +95,7 @@ The app keeps its own data separate from the user's addon folder:
 - **`src/lib/`** — the ported CLI logic, one module per concern:
   - `http.ts` — download the filelist; fetch addon zip bytes (with status/content-type checks)
   - `zip.ts` — `fflate` decompression + `plugin-fs` extraction, with path-traversal hardening (rejects absolute/`..` entries); `## DependsOn:` parsing
+  - `backup.ts` — settings export/import: zips `manifest.json` + `installed.json` + `UserSettings.txt` + `SavedVariables/**` via `fflate`; on import, backs up overwritten files to `SavedVariables.bak-<timestamp>/`
   - `filelist.ts` — cache load, name search, UID lookup, thumbnail URL
   - `installed.ts` — installed DB load/save/upsert/remove
   - `config.ts` — persisted app config (plugin-store)
