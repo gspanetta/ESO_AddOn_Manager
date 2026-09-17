@@ -36,7 +36,10 @@ network through Tauri plugins.
   `SavedVariables` folder, and `UserSettings.txt` into a single zip; importing
   wipes the AddOns folder, re-downloads every addon from the backup (with a
   progress bar), and restores the settings files (existing SavedVariables are
-  moved to a timestamped backup folder first).
+  moved to a timestamped backup folder first). On import you can choose to keep
+  your current display settings (resolution, fullscreen, window size) instead
+  of the backup's, so restoring on a machine with a different monitor doesn't
+  break the display.
 - **Elder Scrolls-inspired theme** — dark stone/leather UI with gold accents, Cinzel
   display headings, and addon thumbnails next to names.
 
@@ -97,7 +100,7 @@ The app keeps its own data separate from the user's addon folder:
 - **`src/lib/`** — the ported CLI logic, one module per concern:
   - `http.ts` — download the filelist; fetch addon zip bytes (with status/content-type checks)
   - `zip.ts` — `fflate` decompression + `plugin-fs` extraction, with path-traversal hardening (rejects absolute/`..` entries); `## DependsOn:` parsing
-  - `backup.ts` — settings export/import: zips `manifest.json` + `installed.json` + `UserSettings.txt` + `SavedVariables/**` via `fflate`; import is split into `readBackup` (parse/validate, no side effects) and `restoreSettings` (move overwritten SavedVariables to `SavedVariables.bak-<timestamp>/`, write files, persist the actually-installed DB list)
+  - `backup.ts` — settings export/import: zips `manifest.json` + `installed.json` + `UserSettings.txt` + `SavedVariables/**` via `fflate`; import is split into `readBackup` (parse/validate, no side effects) and `restoreSettings` (move overwritten SavedVariables to `SavedVariables.bak-<timestamp>/`, write files, persist the actually-installed DB list); `mergeUserSettings` keeps the current display settings unless the user opts to overwrite them
   - `filelist.ts` — cache load, name search, UID lookup, thumbnail URL
   - `installed.ts` — installed DB load/save/upsert/remove
   - `config.ts` — persisted app config (plugin-store)

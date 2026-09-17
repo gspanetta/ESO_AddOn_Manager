@@ -1,5 +1,5 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate'
-import { exists, mkdir, readDir, readFile, rename, writeFile } from '@tauri-apps/plugin-fs'
+import { exists, mkdir, readDir, readFile, readTextFile, rename, writeFile, writeTextFile } from '@tauri-apps/plugin-fs'
 import { dirname, joinSync, safeRelative } from './paths'
 import { loadInstalled, saveInstalled } from './installed'
 import type { InstalledAddon } from './types'
@@ -15,6 +15,74 @@ const INSTALLED_ENTRY = 'installed.json'
 const USER_SETTINGS_ENTRY = 'UserSettings.txt'
 /** Zip prefix for all SavedVariables files. */
 const SAVED_VARIABLES_PREFIX = 'SavedVariables/'
+
+/**
+ * `UserSettings.txt` keys that control *display* (resolution, fullscreen,
+ * window geometry). When importing without "overwrite display settings",
+ * lines starting with one of these keys are taken from the *current* file
+ * instead of the backup, so a backup from another machine/monitor does not
+ * break the display configuration. All other lines (graphics quality,
+ * camera, audio, min frame time, ...) are restored from the backup.
+ */
+const DISPLAY_KEY_PATTERNS: RegExp[] = [
+  /^SET\s+PreferMaximizedWindow\b/i,
+  /^SET\s+PreferExclusiveFullscreen\b/i,
+  /^SET\s+FULLSCREEN\b/i,
+  /^SET\s+FULLSCREENRES/i, // FULLSCREENRESHEIGHT / FULLSCREENRESWIDTH (legacy)
+  /^SET\s+FullscreenHeight\b/i,
+  /^SET\s+FullscreenWidth\b/i,
+  /^SET\s+WindowedHeight\b/i,
+  /^SET\s+WindowedWidth\b/i,
+  /^SET\s+ACTIVE_DISPLAY\b/i,
+]
+
+/** True if a `SET …` line in UserSettings.txt is a display setting we preserve on import. */
+export function isDisplaySettingLine(line: string): boolean {
+  return DISPLAY_KEY_PATTERNS.some(re => re.test(line))
+}
+
+/**
+ * Merge a backup UserSettings.txt with the current one: all non-display
+ * lines come from the backup; display lines come from the current file.
+ * If the current file is missing or a display key exists only in the backup,
+ * the backup's version is used.
+ *
+ * Operates on decoded UTF-8 text; the caller is responsible for reading and
+ * writing bytes (see `restoreSettings`).
+ */
+export function mergeUserSettings(backupText: string, currentText: string | null): string {
+  if (currentText === null) return backupText
+
+  const currentDisplayByKey = new Map<string, string>()
+  for (const line of currentText.split(/\r?\n/)) {
+    if (!isDisplaySettingLine(line)) continue
+    // key = everything up to the first quote-delimited value; normalize
+    // whitespace so `SET  FULLSCREEN` and `SET FULLSCREEN` map together.
+    const key = line.replace(/^SET\s+/i, 'SET ').replace(/\s+".*$/, '')
+    currentDisplayByKey.set(key, line)
+  }
+
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const line of backupText.split(/\r?\n/)) {
+    if (isDisplaySettingLine(line)) {
+      const key = line.replace(/^SET\s+/i, 'SET ').replace(/\s+".*$/, '')
+      const current = currentDisplayByKey.get(key)
+      if (current !== undefined) {
+        out.push(current)
+        seen.add(key)
+        continue
+      }
+    }
+    out.push(line)
+  }
+
+  // preserve display keys that exist only in the current file (backup lacks them)
+  for (const [key, line] of currentDisplayByKey) {
+    if (!seen.has(key)) out.push(line)
+  }
+  return out.join('\n')
+}
 
 /** Manifest stored in every backup zip; also the parsed result on import. */
 export interface BackupManifest {
@@ -199,16 +267,20 @@ export function readBackup(bytes: Uint8Array): ParsedBackup {
  *  1. Back up any existing SavedVariables that would be overwritten (or that
  *     are not part of the backup and would otherwise linger) into
  *     `SavedVariables.bak-<timestamp>/` (rename, i.e. move).
- *  2. Write SavedVariables files and UserSettings.txt to the live folder
- *     (entries were already validated by `readBackup`).
- *  3. Replace the installed DB with the backup's `installed.json` snapshot —
+ *  2. Write SavedVariables files to the live folder (entries were already
+ *     validated by `readBackup`).
+ *  3. Restore UserSettings.txt from the backup — fully when
+ *     `options.overwriteDisplaySettings` is true, otherwise as a merge that
+ *     keeps the *current* file's display settings (resolution, fullscreen,
+ *     window geometry) so an import from another machine doesn't break them.
+ *  4. Replace the installed DB with the backup's `installed.json` snapshot —
  *     or, if `options.addons` is given (e.g. after a folder wipe + reinstall),
  *     with that final list instead, so the DB matches what is actually on disk.
  */
 export async function restoreSettings(
   backup: ParsedBackup,
   addonPath: string,
-  options: { addons?: InstalledAddon[] } = {}
+  options: { addons?: InstalledAddon[]; overwriteDisplaySettings?: boolean } = {}
 ): Promise<BackupImportResult> {
   const { savedVariables: svFiles, userSettings: userSettingsData, skippedUnsafe } = backup
   // The DB state to persist: caller's final list if provided (post-reinstall),
@@ -248,7 +320,22 @@ export async function restoreSettings(
 
   let restoredUserSettings = false
   if (userSettingsData) {
-    await writeFile(userSettingsPath(addonPath), userSettingsData)
+    const targetPath = userSettingsPath(addonPath)
+    if (options.overwriteDisplaySettings) {
+      // full replace: write the backup bytes as-is (encoding preserved)
+      await writeFile(targetPath, userSettingsData)
+    } else {
+      // merge: backup lines for everything except display settings
+      const backupText = strFromU8(userSettingsData)
+      let currentText: string | null = null
+      try {
+        currentText = await readTextFile(targetPath)
+      } catch {
+        // no current file, or unreadable: backup text is used as-is
+      }
+      const merged = mergeUserSettings(backupText, currentText ?? null)
+      await writeTextFile(targetPath, merged)
+    }
     restoredUserSettings = true
   }
 

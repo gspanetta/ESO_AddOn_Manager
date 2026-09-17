@@ -6,8 +6,10 @@ const existsMock = vi.fn()
 const mkdirMock = vi.fn()
 const readDirMock = vi.fn()
 const readFileMock = vi.fn()
+const readTextFileMock = vi.fn()
 const renameMock = vi.fn()
 const writeFileMock = vi.fn()
+const writeTextFileMock = vi.fn()
 const loadInstalledMock = vi.fn()
 const saveInstalledMock = vi.fn()
 const sepMock = vi.fn(() => '/')
@@ -17,8 +19,10 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
   mkdir: mkdirMock,
   readDir: readDirMock,
   readFile: readFileMock,
+  readTextFile: readTextFileMock,
   rename: renameMock,
   writeFile: writeFileMock,
+  writeTextFile: writeTextFileMock,
 }))
 
 vi.mock('@tauri-apps/api/path', () => ({
@@ -79,8 +83,10 @@ describe('settings backup', () => {
     mkdirMock.mockReset()
     readDirMock.mockReset()
     readFileMock.mockReset()
+    readTextFileMock.mockReset()
     renameMock.mockReset()
     writeFileMock.mockReset()
+    writeTextFileMock.mockReset()
     loadInstalledMock.mockReset()
     saveInstalledMock.mockReset()
     sepMock.mockReset()
@@ -224,11 +230,9 @@ describe('settings backup', () => {
 
       // files written to live SavedVariables
       const written = writeFileMock.mock.calls.map(([p]) => p as string).sort()
-      expect(written).toEqual([
-        '/eso/live/SavedVariables/AddonOne.lua',
-        '/eso/live/SavedVariables/New.lua',
-        '/eso/live/UserSettings.txt',
-      ])
+      expect(written).toEqual(['/eso/live/SavedVariables/AddonOne.lua', '/eso/live/SavedVariables/New.lua'])
+      // UserSettings.txt goes through the merge path (writeTextFile)
+      expect(writeTextFileMock).toHaveBeenCalledWith('/eso/live/UserSettings.txt', expect.any(String))
       // both pre-existing files were backed up (AddonOne.lua because it would be
       // overwritten, Old.lua because it is not part of the import)
       const renamed = renameMock.mock.calls.map(([src]) => src as string).sort()
@@ -265,6 +269,95 @@ describe('settings backup', () => {
       expect(result.restoredUserSettings).toBe(false)
       expect(result.backupDir).toBeNull()
       expect(saveInstalledMock).toHaveBeenCalledWith([installed()])
+    })
+
+    describe('UserSettings.txt display-settings merge', () => {
+      const BACKUP_USER_SETTINGS = [
+        'SET PreferMaximizedWindow "0"',
+        'SET PreferExclusiveFullscreen "0"',
+        'SET FULLSCREEN "1"',
+        'SET ACTIVE_DISPLAY "0"',
+        'SET FullscreenHeight "1080"',
+        'SET FullscreenWidth "1920"',
+        'SET WindowedHeight "1000"',
+        'SET WindowedWidth "1920"',
+        'SET MinFrameTime.2 "0.01000000"',
+        'SET CAMERA_FOV "60"',
+      ].join('\n')
+
+      const CURRENT_USER_SETTINGS = [
+        'SET PreferMaximizedWindow "1"',
+        'SET PreferExclusiveFullscreen "1"',
+        'SET FULLSCREEN "0"',
+        'SET ACTIVE_DISPLAY "1"',
+        'SET FullscreenHeight "2160"',
+        'SET FullscreenWidth "3840"',
+        'SET WindowedHeight "1440"',
+        'SET WindowedWidth "2560"',
+        'SET MinFrameTime.2 "0.00500000"',
+        'SET CAMERA_FOV "70"',
+      ].join('\n')
+
+      it('keeps display settings from the current file and takes the rest from the backup when overwrite is off', async () => {
+        const { readBackup, restoreSettings } = await import('@/lib/backup')
+        existsMock.mockResolvedValue(false)
+        readTextFileMock.mockResolvedValue(CURRENT_USER_SETTINGS)
+
+        const parsed = readBackup(
+          makeBackupZip({ userSettings: strToU8(BACKUP_USER_SETTINGS), svFiles: {}, installedJson: '[]' })
+        )
+        await restoreSettings(parsed, '/eso/live/AddOns', { overwriteDisplaySettings: false })
+
+        expect(writeTextFileMock).toHaveBeenCalledTimes(1)
+        const written = writeTextFileMock.mock.calls[0][1] as string
+        const lines = written.split('\n')
+
+        // display settings come from the current file
+        expect(lines).toContain('SET FULLSCREEN "0"')
+        expect(lines).toContain('SET FullscreenHeight "2160"')
+        expect(lines).toContain('SET FullscreenWidth "3840"')
+        expect(lines).toContain('SET WindowedHeight "1440"')
+        expect(lines).toContain('SET WindowedWidth "2560"')
+        expect(lines).toContain('SET PreferMaximizedWindow "1"')
+        expect(lines).toContain('SET PreferExclusiveFullscreen "1"')
+        expect(lines).toContain('SET ACTIVE_DISPLAY "1"')
+
+        // non-display settings come from the backup
+        expect(lines).toContain('SET MinFrameTime.2 "0.01000000"')
+        expect(lines).toContain('SET CAMERA_FOV "60"')
+
+        // backup's display values must not leak in
+        expect(lines).not.toContain('SET FULLSCREEN "1"')
+        expect(lines).not.toContain('SET FullscreenHeight "1080"')
+      })
+
+      it('fully replaces with the backup bytes when overwrite is on', async () => {
+        const { readBackup, restoreSettings } = await import('@/lib/backup')
+        existsMock.mockResolvedValue(false)
+        readTextFileMock.mockResolvedValue(CURRENT_USER_SETTINGS)
+
+        const backupBytes = strToU8(BACKUP_USER_SETTINGS)
+        const parsed = readBackup(makeBackupZip({ userSettings: backupBytes, svFiles: {}, installedJson: '[]' }))
+        await restoreSettings(parsed, '/eso/live/AddOns', { overwriteDisplaySettings: true })
+
+        expect(writeFileMock).toHaveBeenCalledWith('/eso/live/UserSettings.txt', backupBytes)
+        // no merge read attempted
+        expect(readTextFileMock).not.toHaveBeenCalled()
+      })
+
+      it('uses the backup file as-is when there is no current UserSettings.txt', async () => {
+        const { readBackup, restoreSettings } = await import('@/lib/backup')
+        existsMock.mockResolvedValue(false)
+        readTextFileMock.mockRejectedValue(new Error('missing'))
+
+        const parsed = readBackup(
+          makeBackupZip({ userSettings: strToU8(BACKUP_USER_SETTINGS), svFiles: {}, installedJson: '[]' })
+        )
+        await restoreSettings(parsed, '/eso/live/AddOns', { overwriteDisplaySettings: false })
+
+        const written = writeTextFileMock.mock.calls[0][1] as string
+        expect(written).toBe(BACKUP_USER_SETTINGS)
+      })
     })
   })
 })

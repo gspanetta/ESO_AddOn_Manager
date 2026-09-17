@@ -42,6 +42,8 @@ async function savePath() {
 // --- Settings backup (export / import) ---
 const importSummary = ref<(BackupImportResult & { installFailures: { name: string; error: string }[] }) | null>(null)
 const exportSummary = ref<BackupExportResult | null>(null)
+/** Import option: fully replace UserSettings.txt incl. display settings (default off = keep current display settings). */
+const overwriteDisplaySettings = ref(false)
 
 async function onExport() {
   store.clearError()
@@ -52,12 +54,13 @@ async function onExport() {
 /** Import flow: step 1 — pick + validate the backup; the confirm dialog renders from store.pendingImport. */
 function openImportConfirm() {
   store.clearError()
+  overwriteDisplaySettings.value = false
   void store.previewImport()
 }
 
 /** Import flow: step 2 — wipe the folder, reinstall addons, restore settings. */
 async function confirmImport() {
-  const result = await store.confirmImport()
+  const result = await store.confirmImport(overwriteDisplaySettings.value)
   if (result) importSummary.value = result
 }
 </script>
@@ -152,20 +155,16 @@ async function confirmImport() {
       <div class="eso-card rounded-sm p-5 w-full max-w-lg">
         <h3 class="!text-lg !my-0 mb-3 text-gold-bright">Import settings</h3>
         <p class="text-sm text-parchment-dim mb-2 -mt-1">
-          This backup contains <strong>{{ store.pendingImport.addons.length }}</strong> addon(s). Importing will:
+          This backup contains {{ store.pendingImport.addons.length }} addon(s). Importing will replace:
         </p>
         <ul class="text-sm text-parchment-dim list-disc pl-5 space-y-1 mb-3">
-          <li>
-            <strong>Wipe the AddOns folder</strong> — every addon currently there will be deleted, including untracked
-            ones.
-          </li>
-          <li>Re-download and install each addon from the backup.</li>
-          <li>Overwrite <code class="text-xs">SavedVariables</code> files with the backup's versions.</li>
-          <li>Overwrite <code class="text-xs">UserSettings.txt</code> if the backup contains it.</li>
+          <li>all existing AddOns</li>
+          <li v-if="store.pendingImport.userSettings">UserSettings.txt</li>
+          <li>SavedVariables</li>
         </ul>
 
-        <div v-if="store.pendingImport.addons.length > 0" class="max-h-40 overflow-y-auto mb-3">
-          <p class="text-xs text-parchment-faint italic mb-1">Addons to install:</p>
+        <div v-if="store.pendingImport.addons.length > 0" class="max-h-48 overflow-y-auto mb-3">
+          <p class="text-sm text-parchment-dim mb-1">AddOns to install:</p>
           <ul class="text-xs text-parchment-dim columns-2 gap-4">
             <li v-for="a in store.pendingImport.addons" :key="a.uid" class="truncate" :title="a.name">
               {{ a.name }}
@@ -173,11 +172,14 @@ async function confirmImport() {
           </ul>
         </div>
 
-        <p class="text-xs text-parchment-faint italic">
-          Existing SavedVariables that would be overwritten are moved to a timestamped
-          <code class="text-xs">SavedVariables.bak-*</code> folder first, so nothing is lost. The AddOns folder itself
-          is <em>not</em> backed up — addons are re-downloaded from ESOUI.
-        </p>
+        <label
+          v-if="store.pendingImport.userSettings"
+          class="flex items-center gap-2 mt-3 text-sm text-parchment-dim cursor-pointer select-none w-fit"
+          title="If off, resolution, fullscreen mode and window size are kept from your current UserSettings.txt; only the remaining settings are restored from the backup."
+        >
+          <input v-model="overwriteDisplaySettings" type="checkbox" class="my-0 w-4 h-4 align-middle" />
+          Overwrite current display settings
+        </label>
 
         <p v-if="store.error" class="text-sm text-blood-bright mt-3">
           {{ store.error }}
@@ -186,9 +188,7 @@ async function confirmImport() {
 
         <div class="flex justify-end gap-2 mt-4">
           <button class="btn !my-0" @click="store.cancelImport">Cancel</button>
-          <button class="btn btn-primary !my-0" :disabled="store.loading" @click="confirmImport">
-            Wipe &amp; import
-          </button>
+          <button class="btn btn-primary !my-0" :disabled="store.loading" @click="confirmImport">Import</button>
         </div>
       </div>
     </div>

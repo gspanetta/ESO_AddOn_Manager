@@ -311,12 +311,14 @@ export const useAddonsStore = defineStore('addons', {
      * Step 2 of the import flow: wipe the addon folder, re-install every addon
      * from the pending backup (with progress), then restore SavedVariables +
      * UserSettings.txt and persist the DB to the actually-installed list.
+     * `overwriteDisplaySettings` controls whether UserSettings.txt is replaced
+     * wholly (true) or merged, keeping the current display settings (false).
      * Returns the import summary plus any per-addon install failures, or null
      * if there is no pending import.
      */
-    async confirmImport(): Promise<
-      (BackupImportResult & { installFailures: { name: string; error: string }[] }) | null
-    > {
+    async confirmImport(
+      overwriteDisplaySettings = false
+    ): Promise<(BackupImportResult & { installFailures: { name: string; error: string }[] }) | null> {
       const backup = this.pendingImport
       if (!backup || !this.addonPath) return null
       const addonPath = this.addonPath
@@ -340,7 +342,7 @@ export const useAddonsStore = defineStore('addons', {
           }
         )
 
-        const result = await restoreSettings(backup, addonPath, { addons: installed })
+        const result = await restoreSettings(backup, addonPath, { addons: installed, overwriteDisplaySettings })
         this.installed = await loadInstalled()
         this.refreshUpdateMap()
         return {

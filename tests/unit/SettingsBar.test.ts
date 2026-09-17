@@ -157,15 +157,59 @@ describe('SettingsBar', () => {
     }
     await wrapper.vm.$nextTick()
 
-    expect(wrapper.text()).toContain('Wipe the AddOns folder')
+    expect(wrapper.text()).toContain('Importing will replace')
+    expect(wrapper.text()).toContain('all existing AddOns')
     expect(wrapper.text()).toContain('Addon One')
     expect(wrapper.text()).toContain('Addon Two')
 
     await wrapper
       .findAll('button')
-      .find(button => button.text() === 'Wipe & import')
+      .find(button => button.text() === 'Import')
       ?.trigger('click')
-    expect(store.confirmImport).toHaveBeenCalled()
+    // default: display settings preserved (checkbox off)
+    expect(store.confirmImport).toHaveBeenCalledWith(false)
+  })
+
+  it('shows the display-settings checkbox in the import dialog and forwards its state', async () => {
+    store.addonPath = '/addons'
+    const wrapper = mount(SettingsBar)
+    store.pendingImport = {
+      manifest: { formatVersion: 1, appVersion: '1.0.0', exportedAt: 0, addons: [] },
+      addons: [],
+      savedVariables: [],
+      userSettings: new Uint8Array([1]),
+      skippedUnsafe: 0,
+    }
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('Overwrite current display settings')
+
+    // the import dialog is the only place a <label> wraps a checkbox besides the settings bar
+    const checkbox = wrapper
+      .findAll('input[type="checkbox"]')
+      .filter(c => c.element.closest('label')?.textContent?.includes('display settings'))[0]
+    await checkbox.setValue(true)
+
+    await wrapper
+      .findAll('button')
+      .find(button => button.text() === 'Import')
+      ?.trigger('click')
+    expect(store.confirmImport).toHaveBeenCalledWith(true)
+  })
+
+  it('hides the display-settings checkbox when the backup has no UserSettings.txt', async () => {
+    store.addonPath = '/addons'
+    const wrapper = mount(SettingsBar)
+    store.pendingImport = {
+      manifest: { formatVersion: 1, appVersion: '1.0.0', exportedAt: 0, addons: [] },
+      addons: [],
+      savedVariables: [],
+      userSettings: null,
+      skippedUnsafe: 0,
+    }
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).not.toContain('Overwrite current display settings')
   })
 
   it('shows a progress bar while an import is running', async () => {
