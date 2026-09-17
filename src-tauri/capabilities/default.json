@@ -22,7 +22,9 @@
       "allow": [
         { "path": "$APPDATA/**" },
         { "path": "$APPCONFIG/**" },
-        { "path": "$HOME/**" }
+        { "path": "$HOME/**" },
+        { "path": "/mnt/**" },
+        { "path": "/media/**" }
       ]
     },
     {

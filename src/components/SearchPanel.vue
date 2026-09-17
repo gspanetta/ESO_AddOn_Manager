@@ -30,7 +30,7 @@ function install(entry: FileListEntry) {
       v-model="localQuery"
       type="search"
       placeholder="Search addons… (e.g. Master Merchant)"
-      class="w-full !my-0"
+      class="w-full !my-0 !mx-0"
       :disabled="!store.addonPath"
     />
 
